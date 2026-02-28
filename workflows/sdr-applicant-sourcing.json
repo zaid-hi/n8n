@@ -1,0 +1,306 @@
+{
+  "name": "Automate Finding New SDR Job Applicants",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -980,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "keepOnlySet": true,
+        "values": {
+          "string": [
+            {
+              "name": "serpApiBaseUrl",
+              "value": "https://serpapi.com/search.json"
+            },
+            {
+              "name": "keywords",
+              "value": "\"sales development representative\" OR SDR"
+            },
+            {
+              "name": "regionsCsv",
+              "value": "United States,Canada,United Kingdom"
+            }
+          ],
+          "number": [
+            {
+              "name": "resultsPerRegion",
+              "value": 20
+            }
+          ]
+        }
+      },
+      "id": "2",
+      "name": "Set Search Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $json;\nconst regions = cfg.regionsCsv.split(',').map((r) => r.trim()).filter(Boolean);\nreturn regions.map((region) => ({\n  json: {\n    serpApiBaseUrl: cfg.serpApiBaseUrl,\n    keywords: cfg.keywords,\n    resultsPerRegion: cfg.resultsPerRegion,\n    region,\n    query: `site:linkedin.com/in (${cfg.keywords}) \"${region}\" \"open to work\"`\n  }\n}));"
+      },
+      "id": "3",
+      "name": "Build Regional Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "4",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -320,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.serpApiBaseUrl}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google"
+            },
+            {
+              "name": "q",
+              "value": "={{$json.query}}"
+            },
+            {
+              "name": "num",
+              "value": "={{$json.resultsPerRegion}}"
+            },
+            {
+              "name": "api_key",
+              "value": "={{$env.SERPAPI_API_KEY}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5",
+      "name": "Search Candidate Profiles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -100,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $json.organic_results || [];\nconst region = $item(0).$node['Split In Batches'].json.region;\nconst items = [];\nfor (const result of source) {\n  const link = result.link || '';\n  if (!/linkedin\\.com\\/in\\//i.test(link)) continue;\n  const title = result.title || '';\n  const snippet = result.snippet || '';\n  items.push({\n    json: {\n      profileUrl: link.split('?')[0],\n      headline: title,\n      summary: snippet,\n      region\n    }\n  });\n}\nreturn items;"
+      },
+      "id": "6",
+      "name": "Extract Candidate Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        130,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const store = $getWorkflowStaticData('global');\nif (!store.seenProfiles) store.seenProfiles = {};\nconst fresh = [];\nfor (const item of items) {\n  const url = item.json.profileUrl;\n  if (!store.seenProfiles[url]) {\n    store.seenProfiles[url] = new Date().toISOString();\n    fresh.push(item);\n  }\n}\nreturn fresh;"
+      },
+      "id": "7",
+      "name": "Filter New Applicants",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        350,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$items().length}}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "8",
+      "name": "Any New Applicants?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        570,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "#recruiting",
+        "text": "=New SDR candidate lead found in {{$json.region}}\n*{{$json.headline}}*\n{{$json.summary}}\n{{$json.profileUrl}}"
+      },
+      "id": "9",
+      "name": "Send To Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        140,
+        0
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "replace-me",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set Search Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Search Config": {
+      "main": [
+        [
+          {
+            "node": "Build Regional Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Regional Queries": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Search Candidate Profiles",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Search Candidate Profiles": {
+      "main": [
+        [
+          {
+            "node": "Extract Candidate Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Candidate Leads": {
+      "main": [
+        [
+          {
+            "node": "Filter New Applicants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Applicants": {
+      "main": [
+        [
+          {
+            "node": "Any New Applicants?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any New Applicants?": {
+      "main": [
+        [
+          {
+            "node": "Send To Slack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Send To Slack": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
